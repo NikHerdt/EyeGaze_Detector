@@ -9,6 +9,15 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QLabel, QLineEdit, QPush
 
 def determine_quadrant(x, y, width, height):
     """Determine the gaze quadrant based on (x, y) coordinates and screen dimensions."""
+    center_x = width / 2
+    center_y = height / 2
+    axis_x = width / 4
+    axis_y = height / 4
+
+    # Check if the point is within the ellipse
+    if ((x - center_x) ** 2) / (axis_x ** 2) + ((y - center_y) ** 2) / (axis_y ** 2) <= 1:
+        return 'center'
+
     slope = height / width
     if y < slope * x:  # Above top-left to bottom-right
         if y < height - slope * x:  # Above top-right to bottom-left
@@ -39,7 +48,7 @@ def process_videos(input_dir, output_dir, progress_callback):
     for video in videos_r:
         video_path = shlex.quote(os.path.join(input_dir, video))
         output_path = shlex.quote(output_dir)
-        os.system(f'OpenFace/build/bin/FeatureExtraction -f {video_path} -out_dir {output_path} -gaze -tracked')
+        os.system(f'openFace/OpenFace/build/bin/FeatureExtraction -f {video_path} -out_dir {output_path} -gaze -tracked')
         processed_videos += 1
         progress_callback(int((processed_videos / total_videos) * 100))
 
@@ -122,24 +131,58 @@ def process_videos(input_dir, output_dir, progress_callback):
             # Get the corresponding gaze quadrant info
             if frame_index < len(gaze_data):
                 gaze_quadrant = gaze_data.iloc[frame_index]['gaze_quadrant']
+                gaze_x = gaze_data.iloc[frame_index]['gaze_x']
+                gaze_y = gaze_data.iloc[frame_index]['gaze_y']
 
                 # Draw translucent rectangle over the quadrant
                 overlay = frame.copy()
                 alpha = 0.3  # Transparency factor
 
+                # Draw the lines from top left to bottom right and top right to bottom left
+                cv2.line(overlay, (0, 0), (frame_width, frame_height), (0, 0, 255), 4)
+                cv2.line(overlay, (frame_width, 0), (0, frame_height), (0, 0, 255), 4)
+
+                # Draw the center ellipse
+                center_x = frame_width // 2
+                center_y = frame_height // 2
+                axis_x = frame_width // 4
+                axis_y = frame_height // 4
+                cv2.ellipse(overlay, (center_x, center_y), (axis_x, axis_y), 0, 0, 360, (0, 0, 255), 4)
+
+
+                # Draw the words "UP", "DOWN", "LEFT", "RIGHT"
+                text_color = (255, 255, 255)  # White color for default
+                highlight_color = (0, 255, 0)  # Green color for highlight
+
+                cv2.putText(overlay, 'UP', (frame_width // 2 - 50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, text_color, 4, cv2.LINE_AA)
+                cv2.putText(overlay, 'DOWN', (frame_width // 2 - 100, frame_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 2, text_color, 4, cv2.LINE_AA)
+                cv2.putText(overlay, 'LEFT', (50, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, text_color, 4, cv2.LINE_AA)
+                cv2.putText(overlay, 'RIGHT', (frame_width - 200, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, text_color, 4, cv2.LINE_AA)
+
                 if gaze_quadrant == 'up':
-                    points = np.array([[0, 0], [frame_width, 0], [frame_width, frame_height // 2], [0, frame_height // 2]])
+                    points = np.array([[0, 0], [frame_width, 0], [frame_width // 2, frame_height // 2]])  # Upper triangle
+                    cv2.putText(overlay, 'UP', (frame_width // 2 - 50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
                 elif gaze_quadrant == 'down':
-                    points = np.array([[0, frame_height // 2], [frame_width, frame_height // 2], [frame_width, frame_height], [0, frame_height]])
+                    points = np.array([[0, frame_height], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])  # Lower triangle
+                    cv2.putText(overlay, 'DOWN', (frame_width // 2 - 100, frame_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
                 elif gaze_quadrant == 'left':
-                    points = np.array([[0, 0], [frame_width // 2, 0], [frame_width // 2, frame_height], [0, frame_height]])
+                    points = np.array([[0, 0], [0, frame_height], [frame_width // 2, frame_height // 2]])  # Left triangle
+                    cv2.putText(overlay, 'LEFT', (50, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
                 elif gaze_quadrant == 'right':
-                    points = np.array([[frame_width // 2, 0], [frame_width, 0], [frame_width, frame_height], [frame_width // 2, frame_height]])
+                    points = np.array([[frame_width, 0], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])  # Right triangle
+                    cv2.putText(overlay, 'RIGHT', (frame_width - 200, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                elif gaze_quadrant == 'center':
+                    # set points to an ellipse in the center
+                    points = np.array([[center_x - axis_x, center_y - axis_y], [center_x + axis_x, center_y - axis_y],
+                                       [center_x + axis_x, center_y + axis_y], [center_x - axis_x, center_y + axis_y]])
 
                 cv2.fillPoly(overlay, [points], (0, 255, 255))
 
                 # Blend the overlay with the frame
                 cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+                # overlay gaze point
+                cv2.circle(overlay, (int(gaze_x * frame_width), int(gaze_y * frame_height)), 10, (0, 0, 0), -1)
 
             # Write the frame to the output video
             out.write(frame)
