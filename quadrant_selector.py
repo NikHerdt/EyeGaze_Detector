@@ -7,24 +7,35 @@ import shlex
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QLabel, QLineEdit, QPushButton,
                              QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QMessageBox, QProgressBar)
 
-def determine_quadrant(x, y, width, height):
-    """Determine the gaze quadrant based on (x, y) coordinates and screen dimensions."""
-    slope = height / width
-    if y < slope * x:  # Above top-left to bottom-right
-        if y < height - slope * x:  # Above top-right to bottom-left
-            return 'up'
-        else:
-            return 'right'
-    else:  # Below top-left to bottom-right
-        if y < height - slope * x:  # Below top-right to bottom-left
-            return 'left'
-        else:
-            return 'down'
+def get_normal_vector(row):
+    """Compute the normal vector from head pose angles."""
+    rx, ry, rz = row['pose_Rx'], row['pose_Ry'], row['pose_Rz']
+    
+    # Convert Euler angles to a direction vector
+    normal_vector = np.array([
+        np.cos(ry) * np.cos(rx),  # X component
+        np.sin(rx),               # Y component
+        np.sin(ry) * np.cos(rx)   # Z component
+    ])
+    
+    return normal_vector
 
-# Update the process_videos function to pass actual height and width
+def determine_quadrant_from_normal(normal_vector):
+    """Determine the gaze quadrant based on the head normal vector."""
+    x, y, z = normal_vector  # Extract components
+    
+    if y > abs(x) and y > abs(z):
+        return 'up'
+    elif -y > abs(x) and -y > abs(z):
+        return 'down'
+    elif x > abs(y) and x > abs(z):
+        return 'right'
+    elif -x > abs(y) and -x > abs(z):
+        return 'left'
+    return 'center'
+
 def process_videos(input_dir, output_dir, progress_callback):
-    """Process videos for gaze quadrant analysis and overlay."""
-    # Ensure output directory exists
+    """Process videos for gaze quadrant analysis using head pose normal vector."""
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -34,98 +45,31 @@ def process_videos(input_dir, output_dir, progress_callback):
     total_videos = len(videos_r)
     processed_videos = 0
 
+    # Run OpenFace on the videos
     for video in videos_r:
         video_path = shlex.quote(os.path.join(input_dir, video))
         output_path = shlex.quote(output_dir)
-        os.system(f'OpenFace/build/bin/FeatureExtraction -f {video_path} -out_dir {output_path} -gaze -tracked')
+        os.system(f'OpenFace/build/bin/FeatureExtraction -f {video_path} -out_dir {output_path}')
         processed_videos += 1
         progress_callback(int((processed_videos / total_videos) * 100))
 
     openface_files = os.listdir(output_dir)
-    csvs = [file for file in openface_files if '.csv' in file]
-    videos_of = [file for file in openface_files if '.avi' in file]
+    csvs = [file for file in openface_files if file.endswith('.csv')]
 
     for csv in csvs:
         df = pd.read_csv(os.path.join(output_dir, csv))
-        eye_vector_0 = df[['gaze_0_x', 'gaze_0_y', 'gaze_0_z', 'gaze_angle_x', 'gaze_angle_y']].apply(lambda row: np.array(row), axis=1)
-        eye_vector_1 = df[['gaze_1_x', 'gaze_1_y', 'gaze_1_z', 'gaze_angle_x', 'gaze_angle_y']].apply(lambda row: np.array(row), axis=1)
 
-        df['condensed_eye_vector'] = [(v0[:3] + v1[:3]) / 2 for v0, v1 in zip(eye_vector_0, eye_vector_1)]
-        df['condensed_gaze_angle'] = [(v0[3:] + v1[3:]) / 2 for v0, v1 in zip(eye_vector_0, eye_vector_1)]
-
-        def interpolate_gaze_point(row):
-            x, y, z = row['condensed_eye_vector']
-            angle_x, angle_y = row['condensed_gaze_angle']
-            distance = 1
-            gaze_x = x + distance * np.tan(angle_x)
-            gaze_y = y + distance * np.tan(angle_y)
-            return gaze_x, gaze_y
-
-        df['gaze_x'], df['gaze_y'] = zip(*df.apply(interpolate_gaze_point, axis=1))
-
-        video_file = os.path.join(output_dir, csv.replace('.csv', '.avi'))
-        cap = cv2.VideoCapture(video_file)
-        if not cap.isOpened():
-            print(f"Failed to open video file {video_file}.")
+        if 'pose_Rx' not in df.columns or 'pose_Ry' not in df.columns or 'pose_Rz' not in df.columns:
+            print(f"Missing head pose data in {csv}. Skipping.")
             continue
 
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()
-
-        df['gaze_quadrant'] = df.apply(lambda row: determine_quadrant(
-            row['gaze_x'], row['gaze_y'], frame_width, frame_height), axis=1)
+        df['head_normal_vector'] = df.apply(get_normal_vector, axis=1)
+        df['gaze_quadrant'] = df['head_normal_vector'].apply(determine_quadrant_from_normal)
 
         df.to_csv(os.path.join(output_dir, 'gaze_' + csv), index=False)
 
-    for video in videos_of:
-        video_file = os.path.join(output_dir, video)
-        csv_file = os.path.join(output_dir, 'gaze_' + video.replace('.avi', '.csv'))
-
-        if not os.path.exists(csv_file):
-            print(f"CSV file {csv_file} does not exist. Skipping video {video}.")
-            continue
-
-        gaze_data = pd.read_csv(csv_file)
-        cap = cv2.VideoCapture(video_file)
-        if not cap.isOpened():
-            print(f"Failed to open video file {video_file}.")
-            continue
-
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-
-        output_file = os.path.join(output_dir, 'overlay_' + video.replace('.avi', '.mp4'))
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_file, fourcc, fps, (frame_width, frame_height))
-        if not out.isOpened():
-            print(f"Failed to create VideoWriter object for {output_file}.")
-            cap.release()
-            continue
-
-        frame_index = 0
-        slope = frame_height / frame_width
-
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            if frame_index < len(gaze_data):
-                gaze_quadrant = gaze_data.iloc[frame_index]['gaze_quadrant']
-                overlay = frame.copy()
-                alpha = 0.3
-
-                cv2.line(frame, (0, int(slope * frame_width)), (frame_width, 0), (255, 0, 0), 2)
-                cv2.line(frame, (0, frame_height - int(slope * frame_width)), (frame_width, frame_height), (255, 0, 0), 2)
-
-            out.write(frame)
-            frame_index += 1
-
-        cap.release()
-        out.release()
-        cv2.destroyAllWindows()
+    progress_callback(100)
+    print("Processing complete.")
 
 class VideoProcessor(QMainWindow):
     def __init__(self):
