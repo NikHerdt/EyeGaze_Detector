@@ -246,6 +246,9 @@ def process_videos(input_dir, output_dir, progress_callback):
         out.release()
         cv2.destroyAllWindows()
 
+        # After creating the quadrant overlay video, create the gaze vector visualization
+        create_gaze_vector_video(video_file, csv_file, output_dir)
+
         processed_videos += 1
         progress_callback(int((processed_videos / total_videos) * 100))
 
@@ -253,6 +256,94 @@ def process_videos(input_dir, output_dir, progress_callback):
 
     progress_callback(100)
     print("Processing complete.")
+
+def create_gaze_vector_video(video_file, csv_file, output_dir):
+    """Create a visualization showing where the gaze vector points with a heat map."""
+    # Read the CSV file with gaze data
+    gaze_data = pd.read_csv(csv_file)
+    
+    # Check if necessary gaze columns exist
+    if not all(col in gaze_data.columns for col in ['gaze_0_x', 'gaze_0_y', 'gaze_0_z', 
+                                                   'gaze_1_x', 'gaze_1_y', 'gaze_1_z']):
+        print(f"Missing required gaze data in {csv_file}. Skipping gaze vector visualization.")
+        return
+    
+    # Open the video file
+    cap = cv2.VideoCapture(video_file)
+    if not cap.isOpened():
+        print(f"Failed to open video file {video_file}.")
+        return
+    
+    # Get video properties
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    
+    # Create VideoWriter for the output
+    output_file = os.path.join(output_dir, 'gaze_vector_' + os.path.basename(video_file).replace('.avi', '.mp4'))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_file, fourcc, fps, (frame_width, frame_height))
+    
+    frame_index = 0
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Get the corresponding gaze data
+        if frame_index < len(gaze_data):
+            row = gaze_data.iloc[frame_index]
+            
+            # Calculate average gaze vector
+            gaze_vector = np.array([
+                (row['gaze_0_x'] + row['gaze_1_x']) / 2,
+                (row['gaze_0_y'] + row['gaze_1_y']) / 2,
+                (row['gaze_0_z'] + row['gaze_1_z']) / 2
+            ])
+            
+            # Project gaze vector onto 2D screen
+            # The negative signs adjust for screen coordinate system
+            scale = 300  # Scale factor for better visualization
+            center_x = frame_width // 2
+            center_y = frame_height // 2
+            
+            # Project the endpoint where the gaze is pointing
+            endpoint_x = center_x - int(gaze_vector[0] * scale)
+            endpoint_y = center_y - int(gaze_vector[1] * scale)
+            
+            # Keep endpoints within frame bounds
+            endpoint_x = max(0, min(endpoint_x, frame_width-1))
+            endpoint_y = max(0, min(endpoint_y, frame_height-1))
+            
+            # Create a heat map overlay
+            heatmap = np.zeros((frame_height, frame_width), dtype=np.uint8)
+            cv2.circle(heatmap, (endpoint_x, endpoint_y), 60, 255, -1)
+            heatmap = cv2.GaussianBlur(heatmap, (121, 121), 30)
+            
+            # Apply color map to heatmap
+            colored_heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+            
+            # Overlay heatmap on frame
+            alpha = 0.4
+            cv2.addWeighted(colored_heatmap, alpha, frame, 1.0-alpha, 0, frame)
+            
+            # Draw arrow from center to gaze point
+            cv2.arrowedLine(frame, (center_x, center_y), (endpoint_x, endpoint_y), 
+                           (0, 255, 0), 3, cv2.LINE_AA)
+            
+            # Add text information
+            cv2.putText(frame, f"Gaze vector: X={gaze_vector[0]:.2f}, Y={gaze_vector[1]:.2f}, Z={gaze_vector[2]:.2f}", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            
+        # Write frame to output video
+        out.write(frame)
+        frame_index += 1
+    
+    # Release resources
+    cap.release()
+    out.release()
+    print(f"Created gaze vector visualization: {output_file}")
 
 class VideoProcessor(QMainWindow):
     def __init__(self):
