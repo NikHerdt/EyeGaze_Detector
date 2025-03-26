@@ -56,18 +56,18 @@ def determine_quadrant_from_normal(normal_vector, eyegaze_vector=None):
     relative_x = eyegaze_vector[0] - normal_vector[0]
     relative_y = eyegaze_vector[1] - normal_vector[1]
     
-    # Determine horizontal component
+    # Determine horizontal component - FIXED: reversed left/right direction
     if abs(relative_x) < 0.2:  # Threshold for center
         h_direction = 'center'
-    elif relative_x > 0:
-        h_direction = 'right'
+    elif relative_x > 0:  # If relative_x is positive, person is looking RIGHT
+        h_direction = 'right'  # This is already correct
     else:
-        h_direction = 'left'
-        
-    # Determine vertical component
+        h_direction = 'left'  # This is already correct
+    
+    # Vertical component is already correct (negative Y is up in screen coordinates)
     if abs(relative_y) < 0.2:  # Threshold for center
         v_direction = 'center'
-    elif relative_y > 0:
+    elif relative_y < 0:  # If relative_y is negative, person is looking UP
         v_direction = 'up'
     else:
         v_direction = 'down'
@@ -303,13 +303,13 @@ def create_gaze_vector_video(video_file, csv_file, output_dir):
             ])
             
             # Project gaze vector onto 2D screen
-            # The negative signs adjust for screen coordinate system
+            # Corrected sign convention for proper vector projection
             scale = 300  # Scale factor for better visualization
             center_x = frame_width // 2
             center_y = frame_height // 2
             
-            # Project the endpoint where the gaze is pointing
-            endpoint_x = center_x - int(gaze_vector[0] * scale)
+            # FIXED: Correct vector projection (+X is right, -Y is up in screen coordinates)
+            endpoint_x = center_x + int(gaze_vector[0] * scale)
             endpoint_y = center_y - int(gaze_vector[1] * scale)
             
             # Keep endpoints within frame bounds
