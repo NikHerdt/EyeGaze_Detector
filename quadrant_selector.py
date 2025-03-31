@@ -6,6 +6,7 @@ import cv2
 import shlex
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QLabel, QLineEdit, QPushButton,
                              QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QMessageBox, QProgressBar)
+from collections import Counter
 
 def determine_quadrant(x, y, width, height):
     """Determine the gaze quadrant based on (x, y) coordinates and screen dimensions."""
@@ -121,6 +122,12 @@ def process_videos(input_dir, output_dir, progress_callback):
             cap.release()
             continue
 
+        # Calculate how many frames represent 2 seconds
+        frames_in_2_seconds = int(fps * 2)
+
+        # Initialize a list to store the quadrants from the last 2 seconds
+        recent_quadrants = []
+
         frame_index = 0
 
         while cap.isOpened():
@@ -134,9 +141,24 @@ def process_videos(input_dir, output_dir, progress_callback):
                 gaze_x = gaze_data.iloc[frame_index]['gaze_x']
                 gaze_y = gaze_data.iloc[frame_index]['gaze_y']
 
+                # Update the sliding window of recent quadrants
+                recent_quadrants.append(gaze_quadrant)
+                if len(recent_quadrants) > frames_in_2_seconds:
+                    recent_quadrants.pop(0)  # Remove oldest entry
+
+                # Calculate the most frequent quadrant in the last 2 seconds
+                if recent_quadrants:
+                    counter = Counter(recent_quadrants)
+                    most_common_quadrant = counter.most_common(1)[0][0]
+                    quadrant_count = counter.most_common(1)[0][1]
+                    quadrant_percentage = (quadrant_count / len(recent_quadrants)) * 100
+                else:
+                    most_common_quadrant = "unknown"
+                    quadrant_percentage = 0
+
                 # Draw translucent rectangle over the quadrant
                 overlay = frame.copy()
-                alpha = 0.3  # Transparency factor
+                alpha = 0.6  # Increased transparency factor for brighter highlights
 
                 # Draw the lines from top left to bottom right and top right to bottom left
                 cv2.line(overlay, (0, 0), (frame_width, frame_height), (0, 0, 255), 4)
@@ -149,7 +171,6 @@ def process_videos(input_dir, output_dir, progress_callback):
                 axis_y = frame_height // 4
                 cv2.ellipse(overlay, (center_x, center_y), (axis_x, axis_y), 0, 0, 360, (0, 0, 255), 4)
 
-
                 # Draw the words "UP", "DOWN", "LEFT", "RIGHT"
                 text_color = (255, 255, 255)  # White color for default
                 highlight_color = (0, 255, 0)  # Green color for highlight
@@ -159,30 +180,58 @@ def process_videos(input_dir, output_dir, progress_callback):
                 cv2.putText(overlay, 'LEFT', (50, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, text_color, 4, cv2.LINE_AA)
                 cv2.putText(overlay, 'RIGHT', (frame_width - 200, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, text_color, 4, cv2.LINE_AA)
 
-                if gaze_quadrant == 'up':
-                    points = np.array([[0, 0], [frame_width, 0], [frame_width // 2, frame_height // 2]])  # Upper triangle
-                    cv2.putText(overlay, 'UP', (frame_width // 2 - 50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
-                elif gaze_quadrant == 'down':
-                    points = np.array([[0, frame_height], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])  # Lower triangle
-                    cv2.putText(overlay, 'DOWN', (frame_width // 2 - 100, frame_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
-                elif gaze_quadrant == 'left':
-                    points = np.array([[0, 0], [0, frame_height], [frame_width // 2, frame_height // 2]])  # Left triangle
-                    cv2.putText(overlay, 'LEFT', (50, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
-                elif gaze_quadrant == 'right':
-                    points = np.array([[frame_width, 0], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])  # Right triangle
-                    cv2.putText(overlay, 'RIGHT', (frame_width - 200, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
-                elif gaze_quadrant == 'center':
-                    # set points to an ellipse in the center
-                    points = np.array([[center_x - axis_x, center_y - axis_y], [center_x + axis_x, center_y - axis_y],
-                                       [center_x + axis_x, center_y + axis_y], [center_x - axis_x, center_y + axis_y]])
+                # Create a mask for the center ellipse
+                center_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+                cv2.ellipse(center_mask, (center_x, center_y), (axis_x, axis_y), 0, 0, 360, 255, -1)
 
-                cv2.fillPoly(overlay, [points], (0, 255, 255))
+                if gaze_quadrant == 'center':
+                    # For center, create an elliptical highlight
+                    highlight_mask = center_mask.copy()
+                    highlight_overlay = np.zeros_like(overlay)
+                    highlight_overlay[center_mask > 0] = (0, 255, 255)  # Cyan color (BGR format)
+                    cv2.addWeighted(highlight_overlay, alpha, overlay, 1, 0, overlay)
+
+                else:
+                    # For directional quadrants, create polygon that excludes the center ellipse
+                    highlight_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+
+                    if gaze_quadrant == 'up':
+                        points = np.array([[0, 0], [frame_width, 0], [frame_width // 2, frame_height // 2]])
+                        cv2.putText(overlay, 'UP', (frame_width // 2 - 50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                    elif gaze_quadrant == 'down':
+                        points = np.array([[0, frame_height], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])
+                        cv2.putText(overlay, 'DOWN', (frame_width // 2 - 100, frame_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                    elif gaze_quadrant == 'left':
+                        points = np.array([[0, 0], [0, frame_height], [frame_width // 2, frame_height // 2]])
+                        cv2.putText(overlay, 'LEFT', (50, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                    elif gaze_quadrant == 'right':
+                        points = np.array([[frame_width, 0], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])
+                        cv2.putText(overlay, 'RIGHT', (frame_width - 200, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+
+                    # Fill the polygon on the mask
+                    cv2.fillPoly(highlight_mask, [points], 255)
+
+                    # Subtract the center ellipse from the highlight mask
+                    highlight_mask = cv2.subtract(highlight_mask, center_mask)
+
+                    # Apply the highlight color using the mask
+                    highlight_overlay = np.zeros_like(overlay)
+                    highlight_overlay[highlight_mask > 0] = (0, 255, 255)  # Cyan color (BGR format)
+                    cv2.addWeighted(highlight_overlay, alpha, overlay, 1, 0, overlay)
 
                 # Blend the overlay with the frame
                 cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
                 # overlay gaze point
-                cv2.circle(overlay, (int(gaze_x * frame_width), int(gaze_y * frame_height)), 10, (0, 0, 0), -1)
+                cv2.circle(frame, (int(gaze_x * frame_width), int(gaze_y * frame_height)), 10, (0, 0, 0), -1)
+
+                # Add text showing the most frequent quadrant over the last 2 seconds
+                stats_text = f"Most frequent (2s): {most_common_quadrant.upper()} ({quadrant_percentage:.1f}%)"
+                cv2.rectangle(frame, (10, frame_height - 80), (500, frame_height - 20), (0, 0, 0), -1)
+                cv2.putText(
+                    frame, stats_text, (20, frame_height - 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA
+                )
 
             # Write the frame to the output video
             out.write(frame)
