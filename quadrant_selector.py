@@ -124,10 +124,17 @@ def process_videos(input_dir, output_dir, progress_callback):
 
         # Calculate how many frames represent 2 seconds
         frames_in_2_seconds = int(fps * 2)
-
+        
+        # Calculate how many frames represent 0.5 seconds
+        frames_in_half_second = int(fps * 0.5)
+        
         # Initialize a list to store the quadrants from the last 2 seconds
         recent_quadrants = []
-
+        
+        # Variables to track stable quadrants
+        current_stable_quadrant = None
+        consecutive_same_quadrant_count = 0
+        
         frame_index = 0
 
         while cap.isOpened():
@@ -140,18 +147,37 @@ def process_videos(input_dir, output_dir, progress_callback):
                 gaze_quadrant = gaze_data.iloc[frame_index]['gaze_quadrant']
                 gaze_x = gaze_data.iloc[frame_index]['gaze_x']
                 gaze_y = gaze_data.iloc[frame_index]['gaze_y']
-
-                # Update the sliding window of recent quadrants
-                recent_quadrants.append(gaze_quadrant)
-                if len(recent_quadrants) > frames_in_2_seconds:
-                    recent_quadrants.pop(0)  # Remove oldest entry
-
+                
+                # Track consecutive frames with the same quadrant
+                if gaze_quadrant == current_stable_quadrant:
+                    consecutive_same_quadrant_count += 1
+                else:
+                    current_stable_quadrant = gaze_quadrant
+                    consecutive_same_quadrant_count = 1
+                
+                # Only consider the quadrant if it's been stable for at least 0.5 seconds
+                stable_quadrant = None
+                if consecutive_same_quadrant_count >= frames_in_half_second:
+                    stable_quadrant = current_stable_quadrant
+                    
+                    # Only update the sliding window if the quadrant is stable
+                    recent_quadrants.append(stable_quadrant)
+                    if len(recent_quadrants) > frames_in_2_seconds:
+                        recent_quadrants.pop(0)  # Remove oldest entry
+                
                 # Calculate the most frequent quadrant in the last 2 seconds
                 if recent_quadrants:
-                    counter = Counter(recent_quadrants)
-                    most_common_quadrant = counter.most_common(1)[0][0]
-                    quadrant_count = counter.most_common(1)[0][1]
-                    quadrant_percentage = (quadrant_count / len(recent_quadrants)) * 100
+                    # Filter to only include left and right quadrants
+                    left_right_quadrants = [q for q in recent_quadrants if q in ['left', 'right']]
+                    
+                    if left_right_quadrants:
+                        counter = Counter(left_right_quadrants)
+                        most_common_quadrant = counter.most_common(1)[0][0]
+                        quadrant_count = counter.most_common(1)[0][1]
+                        quadrant_percentage = (quadrant_count / len(left_right_quadrants)) * 100
+                    else:
+                        most_common_quadrant = "none"
+                        quadrant_percentage = 0
                 else:
                     most_common_quadrant = "unknown"
                     quadrant_percentage = 0
@@ -184,40 +210,42 @@ def process_videos(input_dir, output_dir, progress_callback):
                 center_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
                 cv2.ellipse(center_mask, (center_x, center_y), (axis_x, axis_y), 0, 0, 360, 255, -1)
 
-                if gaze_quadrant == 'center':
-                    # For center, create an elliptical highlight
-                    highlight_mask = center_mask.copy()
-                    highlight_overlay = np.zeros_like(overlay)
-                    highlight_overlay[center_mask > 0] = (0, 255, 255)  # Cyan color (BGR format)
-                    cv2.addWeighted(highlight_overlay, alpha, overlay, 1, 0, overlay)
+                # Only highlight and emphasize quadrant text if it's been stable for at least 0.5 seconds
+                if consecutive_same_quadrant_count >= frames_in_half_second:
+                    if gaze_quadrant == 'center':
+                        # For center, create an elliptical highlight
+                        highlight_mask = center_mask.copy()
+                        highlight_overlay = np.zeros_like(overlay)
+                        highlight_overlay[center_mask > 0] = (0, 255, 255)  # Cyan color (BGR format)
+                        cv2.addWeighted(highlight_overlay, alpha, overlay, 1, 0, overlay)
 
-                else:
-                    # For directional quadrants, create polygon that excludes the center ellipse
-                    highlight_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
+                    else:
+                        # For directional quadrants, create polygon that excludes the center ellipse
+                        highlight_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
 
-                    if gaze_quadrant == 'up':
-                        points = np.array([[0, 0], [frame_width, 0], [frame_width // 2, frame_height // 2]])
-                        cv2.putText(overlay, 'UP', (frame_width // 2 - 50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
-                    elif gaze_quadrant == 'down':
-                        points = np.array([[0, frame_height], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])
-                        cv2.putText(overlay, 'DOWN', (frame_width // 2 - 100, frame_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
-                    elif gaze_quadrant == 'left':
-                        points = np.array([[0, 0], [0, frame_height], [frame_width // 2, frame_height // 2]])
-                        cv2.putText(overlay, 'LEFT', (50, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
-                    elif gaze_quadrant == 'right':
-                        points = np.array([[frame_width, 0], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])
-                        cv2.putText(overlay, 'RIGHT', (frame_width - 200, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                        if gaze_quadrant == 'up':
+                            points = np.array([[0, 0], [frame_width, 0], [frame_width // 2, frame_height // 2]])
+                            cv2.putText(overlay, 'UP', (frame_width // 2 - 50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                        elif gaze_quadrant == 'down':
+                            points = np.array([[0, frame_height], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])
+                            cv2.putText(overlay, 'DOWN', (frame_width // 2 - 100, frame_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                        elif gaze_quadrant == 'left':
+                            points = np.array([[0, 0], [0, frame_height], [frame_width // 2, frame_height // 2]])
+                            cv2.putText(overlay, 'LEFT', (50, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
+                        elif gaze_quadrant == 'right':
+                            points = np.array([[frame_width, 0], [frame_width, frame_height], [frame_width // 2, frame_height // 2]])
+                            cv2.putText(overlay, 'RIGHT', (frame_width - 200, frame_height // 2), cv2.FONT_HERSHEY_SIMPLEX, 2, highlight_color, 4, cv2.LINE_AA)
 
-                    # Fill the polygon on the mask
-                    cv2.fillPoly(highlight_mask, [points], 255)
+                        # Fill the polygon on the mask
+                        cv2.fillPoly(highlight_mask, [points], 255)
 
-                    # Subtract the center ellipse from the highlight mask
-                    highlight_mask = cv2.subtract(highlight_mask, center_mask)
+                        # Subtract the center ellipse from the highlight mask
+                        highlight_mask = cv2.subtract(highlight_mask, center_mask)
 
-                    # Apply the highlight color using the mask
-                    highlight_overlay = np.zeros_like(overlay)
-                    highlight_overlay[highlight_mask > 0] = (0, 255, 255)  # Cyan color (BGR format)
-                    cv2.addWeighted(highlight_overlay, alpha, overlay, 1, 0, overlay)
+                        # Apply the highlight color using the mask
+                        highlight_overlay = np.zeros_like(overlay)
+                        highlight_overlay[highlight_mask > 0] = (0, 255, 255)  # Cyan color (BGR format)
+                        cv2.addWeighted(highlight_overlay, alpha, overlay, 1, 0, overlay)
 
                 # Blend the overlay with the frame
                 cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
