@@ -5,7 +5,8 @@ import numpy as np
 import cv2
 import shlex
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QLabel, QLineEdit, QPushButton,
-                             QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QMessageBox, QProgressBar)
+                             QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QMessageBox, QProgressBar,
+                             QComboBox)
 from collections import Counter
 
 def determine_quadrant(x, y, width, height):
@@ -32,8 +33,15 @@ def determine_quadrant(x, y, width, height):
             return 'down'
 
 
-def process_videos(input_dir, output_dir, progress_callback):
-    """Process videos for gaze quadrant analysis and overlay."""
+def process_videos(input_dir, output_dir, progress_callback, stability_threshold=0.5):
+    """Process videos for gaze quadrant analysis and overlay.
+    
+    Args:
+        input_dir: Directory containing input videos
+        output_dir: Directory to save output files
+        progress_callback: Function to call with progress updates
+        stability_threshold: Time in seconds that gaze must remain in the same quadrant
+    """
     # Ensure output directory exists
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -125,8 +133,8 @@ def process_videos(input_dir, output_dir, progress_callback):
         # Calculate how many frames represent 2 seconds
         frames_in_2_seconds = int(fps * 2)
         
-        # Calculate how many frames represent 0.5 seconds
-        frames_in_half_second = int(fps * 0.5)
+        # Calculate how many frames represent the selected stability threshold
+        frames_for_stability = int(fps * stability_threshold)
         
         # Initialize a list to store the quadrants from the last 2 seconds
         recent_quadrants = []
@@ -155,9 +163,9 @@ def process_videos(input_dir, output_dir, progress_callback):
                     current_stable_quadrant = gaze_quadrant
                     consecutive_same_quadrant_count = 1
                 
-                # Only consider the quadrant if it's been stable for at least 0.5 seconds
+                # Only consider the quadrant if it's been stable for the selected time threshold
                 stable_quadrant = None
-                if consecutive_same_quadrant_count >= frames_in_half_second:
+                if consecutive_same_quadrant_count >= frames_for_stability:
                     stable_quadrant = current_stable_quadrant
                     
                     # Only update the sliding window if the quadrant is stable
@@ -210,8 +218,8 @@ def process_videos(input_dir, output_dir, progress_callback):
                 center_mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
                 cv2.ellipse(center_mask, (center_x, center_y), (axis_x, axis_y), 0, 0, 360, 255, -1)
 
-                # Only highlight and emphasize quadrant text if it's been stable for at least 0.5 seconds
-                if consecutive_same_quadrant_count >= frames_in_half_second:
+                # Only highlight and emphasize quadrant text if it's been stable for the required time
+                if consecutive_same_quadrant_count >= frames_for_stability:
                     if gaze_quadrant == 'center':
                         # For center, create an elliptical highlight
                         highlight_mask = center_mask.copy()
@@ -312,6 +320,21 @@ class VideoProcessor(QMainWindow):
         layout.addWidget(self.output_label)
         layout.addLayout(output_layout)
 
+        # Add stability threshold selection
+        self.stability_label = QLabel("Stability Threshold (seconds):")
+        self.stability_combo = QComboBox()
+        for time in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+            self.stability_combo.addItem(str(time))
+        # Set default to 0.5 seconds
+        self.stability_combo.setCurrentText("0.5")
+        
+        stability_layout = QHBoxLayout()
+        stability_layout.addWidget(self.stability_label)
+        stability_layout.addWidget(self.stability_combo)
+        stability_layout.addStretch()
+        
+        layout.addLayout(stability_layout)
+
         # Start processing button
         self.process_button = QPushButton("Start Processing")
         self.process_button.clicked.connect(self.start_processing)
@@ -339,13 +362,14 @@ class VideoProcessor(QMainWindow):
     def start_processing(self):
         input_dir = self.input_line_edit.text()
         output_dir = self.output_line_edit.text()
+        stability_threshold = float(self.stability_combo.currentText())
 
         if not input_dir:
             QMessageBox.critical(self, "Error", "Please select an input directory.")
             return
 
         self.progress_bar.setValue(0)
-        process_videos(input_dir, output_dir, self.update_progress)
+        process_videos(input_dir, output_dir, self.update_progress, stability_threshold)
         QMessageBox.information(self, "Success", "Video processing completed.")
 
     def update_progress(self, value):
