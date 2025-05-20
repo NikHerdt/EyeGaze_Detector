@@ -46,15 +46,14 @@ def process_videos(input_dir, output_dir, progress_callback, stability_threshold
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # Get all videos with R tag
-    videos = os.listdir(input_dir)
-    videos_r = [video for video in videos if 'R' in video]
+    # Get all videos from the input directory
+    videos = [video for video in os.listdir(input_dir) if video.endswith(('.mp4', '.avi', '.mov'))]
 
-    total_videos = len(videos_r)
+    total_videos = len(videos)
     processed_videos = 0
 
     # Run openface on these videos
-    for video in videos_r:
+    for video in videos:
         video_path = shlex.quote(os.path.join(input_dir, video))
         output_path = shlex.quote(output_dir)
         os.system(f'openFace/OpenFace/build/bin/FeatureExtraction -f {video_path} -out_dir {output_path} -gaze -tracked')
