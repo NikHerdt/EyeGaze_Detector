@@ -11,7 +11,7 @@ This application uses OpenFace to detect eye gaze vectors, segment videos into q
 - macOS (for the installation instructions below)
 
 ## Setup Instructions
-Auxillary video if needed: https://youtu.be/ZinqTAkcuAU
+Auxillary [video](https://youtu.be/ESFyLnuXTdc) if needed
 
 ### 1. Clone the Repository
 
