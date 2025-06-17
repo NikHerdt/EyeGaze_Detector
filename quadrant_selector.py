@@ -8,6 +8,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QLabel, QLineEdit, QPush
                              QVBoxLayout, QHBoxLayout, QWidget, QFileDialog, QMessageBox, QProgressBar,
                              QComboBox)
 from collections import Counter
+import platform
+from PyQt5.QtCore import pyqtSignal, QObject
+import threading
 
 def determine_quadrant(x, y, width, height):
     """Determine the gaze quadrant based on (x, y) coordinates and screen dimensions."""
@@ -33,6 +36,14 @@ def determine_quadrant(x, y, width, height):
             return 'down'
 
 
+def get_openface_binary():
+    if platform.system() == "Windows":
+        # Adjust this path as needed for your Windows setup
+        return os.path.join("openFace", "OpenFace", "build", "bin", "FeatureExtraction.exe")
+    else:
+        return os.path.join("openFace", "OpenFace", "build", "bin", "FeatureExtraction")
+
+
 def process_videos(input_dir, output_dir, progress_callback, stability_threshold=0.5):
     """Process videos for gaze quadrant analysis and overlay.
     
@@ -53,10 +64,18 @@ def process_videos(input_dir, output_dir, progress_callback, stability_threshold
     processed_videos = 0
 
     # Run openface on these videos
+    openface_binary = get_openface_binary()
     for video in videos:
-        video_path = shlex.quote(os.path.join(input_dir, video))
-        output_path = shlex.quote(output_dir)
-        os.system(f'openFace/OpenFace/build/bin/FeatureExtraction -f {video_path} -out_dir {output_path} -gaze -tracked')
+        video_path = os.path.join(input_dir, video)
+        output_path = output_dir
+        if platform.system() == "Windows":
+            # No shlex.quote on Windows
+            cmd = f'"{openface_binary}" -f "{video_path}" -out_dir "{output_path}" -gaze -tracked'
+        else:
+            cmd = f'{shlex.quote(openface_binary)} -f {shlex.quote(video_path)} -out_dir {shlex.quote(output_path)} -gaze -tracked'
+        result = os.system(cmd)
+        if result != 0:
+            print(f"OpenFace failed for {video}. Command: {cmd}")
         processed_videos += 1
         progress_callback(int((processed_videos / total_videos) * 100))
 
@@ -283,6 +302,21 @@ def process_videos(input_dir, output_dir, progress_callback, stability_threshold
         print(f"Processed video {video} and saved to {output_file}.")
 
 
+class Worker(QObject):
+    finished = pyqtSignal()
+    progress = pyqtSignal(int)
+
+    def __init__(self, input_dir, output_dir, stability_threshold):
+        super().__init__()
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+        self.stability_threshold = stability_threshold
+
+    def run(self):
+        process_videos(self.input_dir, self.output_dir, self.progress.emit, self.stability_threshold)
+        self.finished.emit()
+
+
 class VideoProcessor(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -348,6 +382,9 @@ class VideoProcessor(QMainWindow):
         container.setLayout(layout)
         self.setCentralWidget(container)
 
+        self.worker = None
+        self.worker_thread = None
+
     def select_input_dir(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Video(s) Directory")
         if directory:
@@ -368,11 +405,19 @@ class VideoProcessor(QMainWindow):
             return
 
         self.progress_bar.setValue(0)
-        process_videos(input_dir, output_dir, self.update_progress, stability_threshold)
-        QMessageBox.information(self, "Success", "Video processing completed.")
+        self.process_button.setEnabled(False)
+        self.worker = Worker(input_dir, output_dir, stability_threshold)
+        self.worker_thread = threading.Thread(target=self.worker.run, daemon=True)
+        self.worker.progress.connect(self.update_progress)
+        self.worker.finished.connect(self.processing_finished)
+        self.worker_thread.start()
 
     def update_progress(self, value):
         self.progress_bar.setValue(value)
+
+    def processing_finished(self):
+        self.process_button.setEnabled(True)
+        QMessageBox.information(self, "Success", "Video processing completed.")
 
 
 if __name__ == "__main__":
